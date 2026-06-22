@@ -1,0 +1,351 @@
+```html
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR 遠距離目的地ビーコン (検索・折りたたみUI)</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- A-Frame & AR.js -->
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+    <script type='text/javascript' src='https://raw.githack.com/AR-js-org/AR.js/master/three.js/build/ar-threex-location-only.js'></script>
+    <script type='text/javascript' src='https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js'></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Helvetica Neue', Arial, sans-serif; }
+        
+        #ui-layer { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            z-index: 100; pointer-events: none; 
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+        .pointer-auto { pointer-events: auto; }
+        .a-enter-vr { display: none !important; }
+
+        @keyframes fadeOut {
+            0% { opacity: 1; }
+            80% { opacity: 1; }
+            100% { opacity: 0; display: none; }
+        }
+        .fade-out { animation: fadeOut 4s forwards; }
+
+        /* スピナーアニメーション */
+        .spinner {
+            border: 2px solid rgba(255,255,255,0.3); border-radius: 50%;
+            border-top: 2px solid white; width: 16px; height: 16px;
+            animation: spin 1s linear infinite; display: inline-block;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-900">
+
+    <!-- 1. スタート画面 -->
+    <div id="start-screen" class="absolute inset-0 bg-gray-900 bg-opacity-95 z-50 flex flex-col items-center justify-center text-white p-6 pointer-auto">
+        <div class="mb-6 bg-indigo-500 p-4 rounded-full shadow-lg shadow-indigo-500/50">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+        </div>
+        <h1 class="text-3xl font-bold mb-2 tracking-wider text-center">AR Beacon<br><span class="text-xl text-cyan-300">場所検索＆遠距離対応</span></h1>
+        <p class="mb-10 text-center text-gray-300 text-sm leading-relaxed mt-4">
+            行きたい場所を検索してARビーコンを設置！<br>
+            遠距離でも空を見上げれば見つかります。<br>
+            <span class="text-yellow-400 font-bold mt-2 inline-block">※カメラと位置情報の許可が必要です</span>
+        </p>
+        <button id="btn-start" class="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-4 px-10 rounded-full shadow-xl transition-transform transform hover:scale-105 active:scale-95 text-lg">
+            ARナビゲーションを開始
+        </button>
+    </div>
+
+    <!-- 2. UIレイヤー -->
+    <div id="ui-layer" class="hidden p-4 pb-8">
+        
+        <!-- 操作パネル (コンパクト版) -->
+        <div class="pointer-auto bg-white/80 backdrop-blur-md rounded-2xl shadow-xl p-3 w-full max-w-md mx-auto mt-2 border border-white/50 transition-all duration-300">
+            
+            <!-- 常時表示：場所検索セクション -->
+            <div class="flex gap-2">
+                <input type="text" id="search-input" placeholder="場所を検索 (例: 東京タワー)" class="flex-1 border-2 border-gray-200 focus:border-indigo-500 rounded-lg p-2 text-sm outline-none transition-colors bg-white/90 shadow-inner">
+                <button id="btn-search" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold transition-colors shadow-md text-sm flex items-center justify-center min-w-[70px]">
+                    検索
+                </button>
+            </div>
+
+            <!-- セット中の目的地の名前表示 -->
+            <div id="target-name-display" class="mt-2 text-center text-xs font-bold text-indigo-700 bg-indigo-50/80 p-1.5 rounded-lg hidden border border-indigo-100">
+                目的地: <span id="target-name-text">---</span>
+            </div>
+
+            <!-- 折りたたみトグルボタン -->
+            <button id="btn-toggle" class="w-full text-center text-xs text-gray-500 mt-2 py-1 flex justify-center items-center gap-1 hover:text-gray-700 outline-none">
+                <span>緯度経度で指定・テスト</span>
+                <svg id="toggle-icon" class="w-4 h-4 transition-transform duration-200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+
+            <!-- 折りたたみエリア：緯度経度直接入力＆テスト -->
+            <div id="advanced-panel" class="hidden mt-2 pt-3 border-t border-gray-200/60">
+                <div class="flex gap-2 mb-3">
+                    <div class="w-1/2">
+                        <label class="block text-[10px] text-gray-500 font-bold mb-1 pl-1">緯度 (Latitude)</label>
+                        <input type="number" id="lat-input" placeholder="例: 35.6585" class="w-full border border-gray-200 focus:border-indigo-500 rounded-lg p-1.5 text-xs outline-none bg-white/90">
+                    </div>
+                    <div class="w-1/2">
+                        <label class="block text-[10px] text-gray-500 font-bold mb-1 pl-1">経度 (Longitude)</label>
+                        <input type="number" id="lng-input" placeholder="例: 139.7454" class="w-full border border-gray-200 focus:border-indigo-500 rounded-lg p-1.5 text-xs outline-none bg-white/90">
+                    </div>
+                </div>
+                
+                <div class="flex gap-2">
+                    <button id="btn-set" class="flex-[2] bg-gray-700 hover:bg-gray-800 text-white py-1.5 px-2 rounded-lg font-bold transition-colors shadow-sm text-xs flex items-center justify-center gap-1">
+                        緯度経度でセット
+                    </button>
+                    <button id="btn-test-far" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-1.5 px-1 rounded-lg font-bold transition-colors shadow-sm text-xs">
+                        北へ3km(テスト)
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- エラー/通知メッセージ表示用 -->
+        <div id="msg-box" class="pointer-auto absolute top-28 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-6 py-2 rounded-full text-sm font-bold shadow-lg hidden w-max max-w-[90%] text-center"></div>
+
+        <!-- 下部：距離HUD -->
+        <div class="pointer-auto text-center mb-4">
+            <div id="hud-distance" class="inline-flex items-center gap-2 bg-black/70 backdrop-blur-sm text-white px-6 py-3 rounded-full shadow-[0_0_15px_rgba(0,255,255,0.3)] border border-cyan-500/30 hidden transform transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00ffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <div class="text-left">
+                    <div class="text-[10px] text-cyan-300 font-bold uppercase tracking-wider leading-none mb-1">Distance</div>
+                    <div class="text-2xl font-mono font-bold leading-none"><span id="dist-value">---</span> <span id="dist-unit" class="text-sm">m</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. ARシーンコンテナ -->
+    <div id="ar-container"></div>
+
+    <script>
+        let currentPos = { lat: null, lng: null };
+        let targetPos = { lat: null, lng: null };
+        let watchId = null;
+
+        const startScreen = document.getElementById('start-screen');
+        const uiLayer = document.getElementById('ui-layer');
+        const arContainer = document.getElementById('ar-container');
+        const searchInput = document.getElementById('search-input');
+        const btnSearch = document.getElementById('btn-search');
+        const latInput = document.getElementById('lat-input');
+        const lngInput = document.getElementById('lng-input');
+        const distValue = document.getElementById('dist-value');
+        const distUnit = document.getElementById('dist-unit');
+        const hudDistance = document.getElementById('hud-distance');
+        const msgBox = document.getElementById('msg-box');
+        const targetNameDisplay = document.getElementById('target-name-display');
+        const targetNameText = document.getElementById('target-name-text');
+        
+        // 折りたたみUI用
+        const btnToggle = document.getElementById('btn-toggle');
+        const advancedPanel = document.getElementById('advanced-panel');
+        const toggleIcon = document.getElementById('toggle-icon');
+
+        // 折りたたみの切り替え
+        btnToggle.addEventListener('click', () => {
+            advancedPanel.classList.toggle('hidden');
+            toggleIcon.classList.toggle('rotate-180');
+        });
+
+        function showMessage(msg, isError = false) {
+            msgBox.textContent = msg;
+            msgBox.className = `pointer-auto absolute top-28 left-1/2 transform -translate-x-1/2 text-white px-6 py-2 rounded-full text-sm font-bold shadow-lg z-50 fade-out w-max max-w-[90%] text-center ${isError ? 'bg-red-500' : 'bg-green-500'}`;
+            msgBox.classList.remove('hidden');
+            void msgBox.offsetWidth; // アニメーションリセット
+        }
+
+        // 距離計算 (メートル)
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; 
+            const φ1 = lat1 * Math.PI/180;
+            const φ2 = lat2 * Math.PI/180;
+            const Δφ = (lat2-lat1) * Math.PI/180;
+            const Δλ = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        // 距離HUDとオブジェクトのスケール更新
+        function updateDistanceHUD() {
+            if (currentPos.lat && targetPos.lat) {
+                const dist = calculateDistance(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
+                
+                if (dist >= 1000) {
+                    distValue.innerText = (dist / 1000).toFixed(2);
+                    distUnit.innerText = 'km';
+                } else {
+                    distValue.innerText = Math.round(dist).toLocaleString();
+                    distUnit.innerText = 'm';
+                }
+                hudDistance.classList.remove('hidden');
+
+                // 遠距離時の自動スケールアップ (基準50m)
+                const beaconContent = document.getElementById('ar-beacon-content');
+                if (beaconContent) {
+                    let scale = Math.max(1, dist / 50);
+                    scale = Math.min(scale, 500); // 拡大上限
+                    beaconContent.setAttribute('scale', `${scale} ${scale} ${scale}`);
+                }
+            }
+        }
+
+        // AR開始ボタン
+        document.getElementById('btn-start').addEventListener('click', async () => {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permissionState = await DeviceOrientationEvent.requestPermission();
+                    if (permissionState !== 'granted') showMessage('傾きセンサーが許可されませんでした', true);
+                } catch (error) { console.error(error); }
+            }
+
+            if ("geolocation" in navigator) {
+                watchId = navigator.geolocation.watchPosition(
+                    (pos) => {
+                        currentPos.lat = pos.coords.latitude;
+                        currentPos.lng = pos.coords.longitude;
+                        updateDistanceHUD();
+                    },
+                    (err) => {
+                        if(!currentPos.lat) showMessage('位置情報を取得できません', true);
+                    },
+                    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+                );
+                
+                startScreen.classList.add('hidden');
+                uiLayer.classList.remove('hidden');
+                injectARScene();
+            } else {
+                showMessage('位置情報に対応していません', true);
+            }
+        });
+
+        function injectARScene() {
+            const sceneHTML = `
+                <a-scene
+                    vr-mode-ui="enabled: false"
+                    arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
+                    renderer="antialias: true; alpha: true"
+                    light="defaultLightsEnabled: true">
+                    
+                    <a-camera gps-camera="minDistance: 5;" far="1000000" rotation-reader></a-camera>
+                    
+                    <a-entity id="ar-beacon" visible="false">
+                        <a-entity id="ar-beacon-content">
+                            <!-- 光の柱 -->
+                            <a-cylinder color="#ffffff" radius="1.5" height="5000" position="0 2500 0" opacity="0.9" material="emissive: #ffffff; emissiveIntensity: 1"></a-cylinder>
+                            <a-cylinder color="#00ffff" radius="6" height="5000" position="0 2500 0" opacity="0.4" material="emissive: #00ffff; emissiveIntensity: 0.6; transparent: true"></a-cylinder>
+                            
+                            <!-- 巨大クリスタル -->
+                            <a-entity position="0 40 0" animation="property: position; dir: alternate; dur: 3000; to: 0 45 0; loop: true">
+                                <a-octahedron color="#ff00ff" radius="12" opacity="0.8" material="emissive: #ff00ff; emissiveIntensity: 0.8" animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear"></a-octahedron>
+                                <a-octahedron color="#ffff00" radius="6" material="emissive: #ffff00; emissiveIntensity: 1; wireframe: true" animation="property: rotation; to: 360 360 0; loop: true; dur: 4000; easing: linear"></a-octahedron>
+                            </a-entity>
+                            
+                            <!-- 地面マーカー -->
+                            <a-ring color="#00ffff" radius-inner="8" radius-outer="9" rotation="-90 0 0" position="0 0.5 0" material="emissive: #00ffff; emissiveIntensity: 1" opacity="0.8"></a-ring>
+                            <a-ring color="#ff00ff" radius-inner="10" radius-outer="10.5" rotation="-90 0 0" position="0 0.5 0" material="emissive: #ff00ff; emissiveIntensity: 1" opacity="0.5" animation="property: rotation; to: -90 360 0; loop: true; dur: 5000; easing: linear"></a-ring>
+                        </a-entity>
+                    </a-entity>
+                </a-scene>
+            `;
+            arContainer.innerHTML = sceneHTML;
+        }
+
+        // 目的地をセットしてARを表示する関数
+        function setDestination(lat, lng, placeName = null) {
+            targetPos.lat = parseFloat(lat);
+            targetPos.lng = parseFloat(lng);
+            
+            latInput.value = targetPos.lat.toFixed(6);
+            lngInput.value = targetPos.lng.toFixed(6);
+            
+            const beacon = document.getElementById('ar-beacon');
+            if (beacon) {
+                beacon.setAttribute('gps-entity-place', `latitude: ${targetPos.lat}; longitude: ${targetPos.lng};`);
+                beacon.setAttribute('visible', 'true');
+                
+                if (placeName) {
+                    targetNameText.textContent = placeName;
+                    targetNameDisplay.classList.remove('hidden');
+                    showMessage(`「${placeName}」をセットしました！`);
+                } else {
+                    targetNameDisplay.classList.add('hidden');
+                    showMessage('目的地をセットしました！');
+                }
+                updateDistanceHUD();
+                
+                // セットしたら自動で詳細パネルを閉じる（見やすくするため）
+                advancedPanel.classList.add('hidden');
+                toggleIcon.classList.remove('rotate-180');
+                searchInput.blur(); // キーボードを閉じる
+            }
+        }
+
+        // 直接入力ボタン
+        document.getElementById('btn-set').addEventListener('click', () => {
+            const lat = latInput.value;
+            const lng = lngInput.value;
+            if (lat && lng) setDestination(lat, lng);
+            else showMessage('緯度と経度を入力してください', true);
+        });
+
+        // テスト用：北へ3km
+        document.getElementById('btn-test-far').addEventListener('click', () => {
+            if (!currentPos.lat || !currentPos.lng) {
+                showMessage('現在地を取得中です...', true);
+                return;
+            }
+            const testLat = currentPos.lat + (3000 / 111000);
+            const testLng = currentPos.lng;
+            setDestination(testLat, testLng, "テスト地点(3km北)");
+        });
+
+        // 場所の検索機能
+        btnSearch.addEventListener('click', async () => {
+            const query = searchInput.value.trim();
+            if (!query) {
+                showMessage('場所の名前を入力してください', true);
+                return;
+            }
+
+            btnSearch.innerHTML = '<span class="spinner"></span>';
+            btnSearch.disabled = true;
+
+            try {
+                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`);
+                const data = await response.json();
+
+                if (data && data.length > 0) {
+                    const place = data[0];
+                    const shortName = place.display_name.split(',')[0]; 
+                    setDestination(place.lat, place.lon, shortName);
+                } else {
+                    showMessage('見つかりませんでした。別のキーワードでお試しください。', true);
+                }
+            } catch (error) {
+                showMessage('検索中にエラーが発生しました', true);
+            } finally {
+                btnSearch.innerHTML = '検索';
+                btnSearch.disabled = false;
+            }
+        });
+
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') btnSearch.click();
+        });
+
+    </script>
+</body>
+</html>
+
+
+```
