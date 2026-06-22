@@ -1,0 +1,276 @@
+```html
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR 目的地ビーコン</title>
+    
+    <!-- Tailwind CSS for UI styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- A-Frame & AR.js (Location Based AR) -->
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+    <script type='text/javascript' src='https://raw.githack.com/AR-js-org/AR.js/master/three.js/build/ar-threex-location-only.js'></script>
+    <script type='text/javascript' src='https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js'></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Helvetica Neue', Arial, sans-serif; }
+        
+        /* UIをARシーンの上に重ねるためのスタイル */
+        #ui-layer { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            z-index: 100; pointer-events: none; 
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+        .pointer-auto { pointer-events: auto; }
+        
+        /* A-Frameの不要なVRボタンを隠す */
+        .a-enter-vr { display: none !important; }
+
+        /* エラーメッセージアニメーション */
+        @keyframes fadeOut {
+            0% { opacity: 1; }
+            80% { opacity: 1; }
+            100% { opacity: 0; display: none; }
+        }
+        .fade-out { animation: fadeOut 4s forwards; }
+    </style>
+</head>
+<body class="bg-gray-900">
+
+    <!-- 1. スタート画面 (権限リクエスト用) -->
+    <div id="start-screen" class="absolute inset-0 bg-gray-900 bg-opacity-95 z-50 flex flex-col items-center justify-center text-white p-6 pointer-auto">
+        <div class="mb-6 bg-indigo-500 p-4 rounded-full shadow-lg shadow-indigo-500/50">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+        </div>
+        <h1 class="text-3xl font-bold mb-2 tracking-wider">AR Beacon</h1>
+        <p class="mb-10 text-center text-gray-300 text-sm leading-relaxed">
+            緯度経度を指定して、空高く伸びる<br>光の柱をARで表示します。<br>
+            <span class="text-yellow-400 font-bold mt-2 inline-block">※カメラと位置情報の許可が必要です</span>
+        </p>
+        <button id="btn-start" class="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-4 px-10 rounded-full shadow-xl transition-transform transform hover:scale-105 active:scale-95 text-lg">
+            ARナビゲーションを開始
+        </button>
+        <p class="mt-8 text-xs text-gray-500 max-w-xs text-center">※プレビュー環境で動作しない場合は、このコードをコピーしてHTTPS環境でテストしてください。</p>
+    </div>
+
+    <!-- 2. UIレイヤー (AR表示中の操作パネル) -->
+    <div id="ui-layer" class="hidden p-4 pb-8">
+        <!-- 上部：目的地入力パネル -->
+        <div class="pointer-auto bg-white/80 backdrop-blur-md rounded-2xl shadow-xl p-4 w-full max-w-md mx-auto mt-2 border border-white/50">
+            <div class="flex gap-2 mb-3">
+                <div class="w-1/2">
+                    <label class="block text-xs text-gray-600 font-bold mb-1 pl-1">緯度 (Latitude)</label>
+                    <input type="number" id="lat-input" placeholder="例: 35.6585" class="w-full border-2 border-gray-200 focus:border-indigo-500 rounded-lg p-2 text-sm outline-none transition-colors bg-white/90">
+                </div>
+                <div class="w-1/2">
+                    <label class="block text-xs text-gray-600 font-bold mb-1 pl-1">経度 (Longitude)</label>
+                    <input type="number" id="lng-input" placeholder="例: 139.7454" class="w-full border-2 border-gray-200 focus:border-indigo-500 rounded-lg p-2 text-sm outline-none transition-colors bg-white/90">
+                </div>
+            </div>
+            <div class="flex gap-2">
+                <button id="btn-set" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-3 rounded-lg font-bold transition-colors shadow-md text-sm flex items-center justify-center gap-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                    セット
+                </button>
+                <button id="btn-test" class="flex-1 bg-teal-500 hover:bg-teal-600 text-white py-2 px-3 rounded-lg font-bold transition-colors shadow-md text-sm">
+                    北へ100m (テスト)
+                </button>
+            </div>
+        </div>
+        
+        <!-- エラー/通知メッセージ表示用 -->
+        <div id="msg-box" class="pointer-auto absolute top-32 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-6 py-2 rounded-full text-sm font-bold shadow-lg hidden">
+            エラーメッセージ
+        </div>
+
+        <!-- 下部：距離HUD -->
+        <div class="pointer-auto text-center mb-4">
+            <div id="hud-distance" class="inline-flex items-center gap-2 bg-black/70 backdrop-blur-sm text-white px-6 py-4 rounded-full shadow-[0_0_15px_rgba(0,255,255,0.3)] border border-cyan-500/30 hidden transform transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00ffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <div class="text-left">
+                    <div class="text-xs text-cyan-300 font-bold uppercase tracking-wider">Distance</div>
+                    <div class="text-2xl font-mono font-bold leading-none"><span id="dist-value">---</span> <span class="text-lg">m</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. ARシーンのコンテナ -->
+    <div id="ar-container"></div>
+
+    <script>
+        // --- 状態管理 ---
+        let currentPos = { lat: null, lng: null };
+        let targetPos = { lat: null, lng: null };
+        let watchId = null;
+
+        // --- DOM要素 ---
+        const startScreen = document.getElementById('start-screen');
+        const uiLayer = document.getElementById('ui-layer');
+        const arContainer = document.getElementById('ar-container');
+        const latInput = document.getElementById('lat-input');
+        const lngInput = document.getElementById('lng-input');
+        const distValue = document.getElementById('dist-value');
+        const hudDistance = document.getElementById('hud-distance');
+        const msgBox = document.getElementById('msg-box');
+
+        // --- UI関数 ---
+        function showMessage(msg, isError = false) {
+            msgBox.textContent = msg;
+            msgBox.className = `pointer-auto absolute top-32 left-1/2 transform -translate-x-1/2 text-white px-6 py-2 rounded-full text-sm font-bold shadow-lg z-50 fade-out ${isError ? 'bg-red-500' : 'bg-green-500'}`;
+            msgBox.classList.remove('hidden');
+            // アニメーションのリセット
+            void msgBox.offsetWidth; 
+        }
+
+        // 距離計算 (Haversine Formula) メートルで返す
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; 
+            const φ1 = lat1 * Math.PI/180;
+            const φ2 = lat2 * Math.PI/180;
+            const Δφ = (lat2-lat1) * Math.PI/180;
+            const Δλ = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        // 距離HUDの更新
+        function updateDistanceHUD() {
+            if (currentPos.lat && targetPos.lat) {
+                const dist = calculateDistance(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
+                distValue.innerText = Math.round(dist).toLocaleString();
+                hudDistance.classList.remove('hidden');
+            }
+        }
+
+        // --- AR開始ロジック ---
+        document.getElementById('btn-start').addEventListener('click', async () => {
+            // iOS 13+ での DeviceOrientation 許可リクエスト
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permissionState = await DeviceOrientationEvent.requestPermission();
+                    if (permissionState !== 'granted') {
+                        showMessage('デバイスの傾きセンサーが許可されませんでした', true);
+                    }
+                } catch (error) {
+                    console.error(error);
+                }
+            }
+
+            // 位置情報の監視開始
+            if ("geolocation" in navigator) {
+                watchId = navigator.geolocation.watchPosition(
+                    (pos) => {
+                        currentPos.lat = pos.coords.latitude;
+                        currentPos.lng = pos.coords.longitude;
+                        updateDistanceHUD();
+                    },
+                    (err) => {
+                        console.error('GPS Error:', err);
+                        if(!currentPos.lat) showMessage('位置情報を取得できません', true);
+                    },
+                    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+                );
+                
+                // 画面切り替えとARシーンの注入
+                startScreen.classList.add('hidden');
+                uiLayer.classList.remove('hidden');
+                injectARScene();
+            } else {
+                showMessage('お使いのブラウザは位置情報に対応していません', true);
+            }
+        });
+
+        // --- ARシーンを動的にDOMに追加 ---
+        function injectARScene() {
+            // AR.jsのシーンを文字列として定義
+            // A-Frameの要素で「天まで届く線」と「巨大なオブジェ」を作る
+            const sceneHTML = `
+                <a-scene
+                    vr-mode-ui="enabled: false"
+                    arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
+                    renderer="antialias: true; alpha: true"
+                    light="defaultLightsEnabled: true">
+                    
+                    <!-- GPSカメラ -->
+                    <a-camera gps-camera="minDistance: 5;" rotation-reader></a-camera>
+                    
+                    <!-- 目的地に表示される巨大なビーコン -->
+                    <a-entity id="ar-beacon" visible="false">
+                        
+                        <!-- 1. 天まで届く光の柱 (中心) -->
+                        <a-cylinder color="#ffffff" radius="1.5" height="5000" position="0 2500 0" opacity="0.9" material="emissive: #ffffff; emissiveIntensity: 1"></a-cylinder>
+                        
+                        <!-- 2. 光の柱 (外側のオーラ) -->
+                        <a-cylinder color="#00ffff" radius="6" height="5000" position="0 2500 0" opacity="0.4" material="emissive: #00ffff; emissiveIntensity: 0.6; transparent: true"></a-cylinder>
+                        
+                        <!-- 3. 空中に浮かぶ巨大なクリスタル (ゆっくり回転・上下) -->
+                        <a-entity position="0 40 0" animation="property: position; dir: alternate; dur: 3000; to: 0 45 0; loop: true">
+                            <!-- 外殻 -->
+                            <a-octahedron color="#ff00ff" radius="12" opacity="0.8" material="emissive: #ff00ff; emissiveIntensity: 0.8" animation="property: rotation; to: 0 360 0; loop: true; dur: 8000; easing: linear"></a-octahedron>
+                            <!-- コア -->
+                            <a-octahedron color="#ffff00" radius="6" material="emissive: #ffff00; emissiveIntensity: 1; wireframe: true" animation="property: rotation; to: 360 360 0; loop: true; dur: 4000; easing: linear"></a-octahedron>
+                        </a-entity>
+                        
+                        <!-- 4. 地面の魔法陣/マーカー -->
+                        <a-ring color="#00ffff" radius-inner="8" radius-outer="9" rotation="-90 0 0" position="0 0.5 0" material="emissive: #00ffff; emissiveIntensity: 1" opacity="0.8"></a-ring>
+                        <a-ring color="#ff00ff" radius-inner="10" radius-outer="10.5" rotation="-90 0 0" position="0 0.5 0" material="emissive: #ff00ff; emissiveIntensity: 1" opacity="0.5" animation="property: rotation; to: -90 360 0; loop: true; dur: 5000; easing: linear"></a-ring>
+
+                    </a-entity>
+                </a-scene>
+            `;
+            arContainer.innerHTML = sceneHTML;
+        }
+
+        // --- 目的地のセット ---
+        function setDestination(lat, lng) {
+            targetPos.lat = parseFloat(lat);
+            targetPos.lng = parseFloat(lng);
+            
+            const beacon = document.getElementById('ar-beacon');
+            if (beacon) {
+                // AR.jsのコンポーネントに緯度経度をセット
+                beacon.setAttribute('gps-entity-place', `latitude: ${targetPos.lat}; longitude: ${targetPos.lng};`);
+                beacon.setAttribute('visible', 'true');
+                
+                showMessage('目的地をセットしました！カメラを見回してください。');
+                updateDistanceHUD();
+            }
+        }
+
+        // セットボタンの処理
+        document.getElementById('btn-set').addEventListener('click', () => {
+            const lat = latInput.value;
+            const lng = lngInput.value;
+            if (lat && lng) {
+                setDestination(lat, lng);
+            } else {
+                showMessage('緯度と経度を入力してください', true);
+            }
+        });
+
+        // テストボタンの処理 (現在地の約100m北をセット)
+        document.getElementById('btn-test').addEventListener('click', () => {
+            if (!currentPos.lat || !currentPos.lng) {
+                showMessage('現在地を取得中です。数秒待ってからお試しください。', true);
+                return;
+            }
+            
+            // 緯度1度は約111km(111,000m)。100m北へずらす。
+            const testLat = currentPos.lat + (100 / 111000);
+            const testLng = currentPos.lng;
+            
+            latInput.value = testLat.toFixed(6);
+            lngInput.value = testLng.toFixed(6);
+            
+            setDestination(testLat, testLng);
+        });
+    </script>
+</body>
+</html>
+
+```
